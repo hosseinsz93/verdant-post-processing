@@ -1,0 +1,46 @@
+{
+  "attributes": {
+    "source_plt": "C:\\Users\\hseyyedzadeh\\Box\\Projects\\Verdant\\data-analysis\\cfd-wake-analysis\\flood-log-7\\Result015000-avg.plt",
+    "title": "Averaging",
+    "zone_title": "Block 1",
+    "ijk": [
+      1325,
+      73,
+      1325
+    ],
+    "variables": [
+      "X",
+      "Y",
+      "Z",
+      "U",
+      "V",
+      "W",
+      "uu",
+      "vv",
+      "ww",
+      "uv",
+      "vw",
+      "uw",
+      "K",
+      "Nv"
+    ],
+    "var_location": {
+      "X": "node",
+      "Y": "node",
+      "Z": "node",
+      "U": "cell",
+      "V": "cell",
+      "W": "cell",
+      "uu": "cell",
+      "vv": "cell",
+      "ww": "cell",
+      "uv": "cell",
+      "vw": "cell",
+      "uw": "cell",
+      "K": "cell",
+      "Nv": "cell"
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}

@@ -1,0 +1,3 @@
+# Large CFD / Tecplot exports
+*.plt
+*.dat
