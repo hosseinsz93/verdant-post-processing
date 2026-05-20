@@ -1,3 +1,7 @@
 # Large CFD / Tecplot exports
 *.plt
 *.dat
+
+# Generated analysis stores (rebuilt via ingest)
+*.zarr/
+*.zarr.json

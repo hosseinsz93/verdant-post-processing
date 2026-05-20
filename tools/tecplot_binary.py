@@ -48,7 +48,10 @@ class TecplotBinaryDataset:
     def __init__(self, path: PathLike, *, read_data: bool = False):
         self.path = Path(path)
         if not self.path.is_file():
-            raise FileNotFoundError(self.path)
+            hint = ""
+            if "flood-log-7" in str(self.path) and "inputs" not in self.path.as_posix():
+                hint = " (data may be under inputs/flood-log-7/)"
+            raise FileNotFoundError(f"{self.path}{hint}")
         self._tf = TecplotFile(str(self.path), read_data=read_data)
         if self._tf.nzones < 1:
             raise ValueError(f"No zones found in {self.path}")

@@ -1,5 +1,7 @@
 numpy>=1.22,<2.3
 zarr>=2.16
 tecio>=2.0.6
+setuptools>=65.0
 pandas>=2.0
 matplotlib>=3.7
+ipykernel>=6.0

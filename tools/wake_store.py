@@ -13,6 +13,20 @@ PathLike = Union[str, Path]
 Plane = Literal["XY", "XZ", "YZ"]
 
 
+def node_to_cell_2d(node: np.ndarray) -> np.ndarray:
+    """Average a 2D node grid to cell centers, shape (I-1, J-1).
+
+    Use for ``contourf`` when the field is cell-centered (e.g. U, W on a slice).
+    """
+    if node.ndim != 2:
+        raise ValueError(f"expected 2D array, got shape {node.shape}")
+    if node.shape[0] < 2 or node.shape[1] < 2:
+        raise ValueError(f"grid too small for cell centers: {node.shape}")
+    return 0.25 * (
+        node[:-1, :-1] + node[1:, :-1] + node[:-1, 1:] + node[1:, 1:]
+    )
+
+
 @dataclass
 class SliceResult:
     plane: Plane

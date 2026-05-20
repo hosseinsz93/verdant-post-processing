@@ -1,8 +1,24 @@
 # CFD Wake Analysis — Postprocessing Workflow
 
-Python tooling to analyze large CFD wake fields exported from Tecplot **binary** (`.plt`) files. The workflow converts each volume once into a **chunked Zarr store**, then supports fast 2D slices and 1D line probes without re-parsing the original binary file.
+Python tooling to analyze large CFD wake fields exported from Tecplot **binary** (`.plt`) files. The workflow converts each volume once into a **chunked Zarr store**, then supports fast 2D slices, line probes, and matplotlib contours without re-parsing the original binary file.
 
-Designed for the Verdant flood/wake case study data (e.g. `flood-log-7/`), but applicable to any single-zone structured Tecplot binary grid with the same conventions.
+Designed for the Verdant flood/wake case study data in `inputs/flood-log-7/`, but applicable to any single-zone structured Tecplot binary grid with the same conventions.
+
+---
+
+## Status (validated)
+
+The following end-to-end path has been tested on `Result015000-avg.plt`:
+
+| Step | What | How |
+|------|------|-----|
+| 1 | Install deps | `pip install -r requirements.txt` |
+| 2 | Ingest | `scripts/ingest_plt_to_zarr.py` → `inputs/flood-log-7/Result015000-avg.zarr` |
+| 3 | Inspect store | `WakeStore` / `wake_postprocess.py info` |
+| 4 | Map Y → J index | `Y.mean(axis=(0,2))` → nearest `j` to target Y |
+| 5 | **W contour on vertical XZ plane** | `slice_plane("XZ", j)` + `node_to_cell_2d` + `contourf` |
+
+**Reference plot:** vertical plane at **Y ≈ 0.65** (spanwise), showing **W** vs **X** and **Z** — see [`wake1.ipynb`](wake1.ipynb) section 6.
 
 ---
 
@@ -14,8 +30,10 @@ Designed for the Verdant flood/wake case study data (e.g. `flood-log-7/`), but a
 - [Input data](#input-data)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Notebook walkthrough (`wake1.ipynb`)](#notebook-walkthrough-wake1ipynb)
 - [Step 1 — Ingest binary to Zarr](#step-1--ingest-binary-to-zarr)
 - [Step 2 — Inspect and extract data](#step-2--inspect-and-extract-data)
+- [Contour plots (cell-centered fields)](#contour-plots-cell-centered-fields)
 - [Python API](#python-api)
 - [Grid and indexing conventions](#grid-and-indexing-conventions)
 - [Performance and disk usage](#performance-and-disk-usage)
@@ -33,7 +51,7 @@ Designed for the Verdant flood/wake case study data (e.g. `flood-log-7/`), but a
 | Tecplot binary (`.plt`) | ~7 GB | Moderate | **Archive / CFD handoff** |
 | Zarr store (`.zarr/`) | ~5–8 GB (compressed) | Fast (chunked slices) | **Daily analysis** |
 
-**Recommendation:** Keep `.plt` as the source of truth from CFD/Tecplot. Run ingest once per case, then point notebooks and scripts at the Zarr store.
+**Recommendation:** Keep `.plt` as the source of truth from CFD/Tecplot. Run ingest once per case, then use the Zarr store in notebooks and scripts.
 
 ---
 
@@ -58,7 +76,7 @@ Designed for the Verdant flood/wake case study data (e.g. `flood-log-7/`), but a
   (Python)     (info / slice / line)
      │
      ▼
-  notebooks, plots, CSV exports
+  wake1.ipynb — contours, probes, CSV exports
 ```
 
 **Libraries:**
@@ -74,31 +92,32 @@ Designed for the Verdant flood/wake case study data (e.g. `flood-log-7/`), but a
 cfd-wake-analysis/
 ├── README.md
 ├── requirements.txt
-├── flood-log-7/                    # CFD outputs (not always in git)
-│   ├── Result015000-avg.plt        # Main 3D averaged wake (binary)
-│   ├── Result015000-avg.zarr/      # Generated analysis store
-│   ├── Result015000-avg.zarr.json  # Metadata sidecar (human-readable)
-│   ├── Flow0_*.dat / Flow1_*.dat   # Small probe tables (separate format)
-│   └── Turbine_*                   # Turbine time histories
+├── .vscode/settings.json           # Default: Anaconda interpreter
+├── inputs/
+│   └── flood-log-7/                # CFD data (*.plt, *.dat gitignored)
+│       ├── Result015000-avg.plt    # Main 3D averaged wake (binary)
+│       ├── Result015000-avg.zarr/  # After ingest
+│       └── Result015000-avg.zarr.json
+├── outputs/                        # CSV / figures from notebook (optional)
 ├── tools/
-│   ├── tecplot_binary.py           # Binary .plt reader wrapper
-│   ├── wake_store.py               # Zarr access API (slices, line probes)
-│   └── tecplot_lazy_reader.py      # Legacy ASCII .dat reader (optional)
+│   ├── tecplot_binary.py           # Binary .plt reader
+│   ├── wake_store.py               # Zarr API, slices, node_to_cell_2d
+│   └── tecplot_lazy_reader.py      # Legacy ASCII reader
 ├── scripts/
-│   ├── ingest_plt_to_zarr.py       # .plt → .zarr conversion
-│   └── wake_postprocess.py         # CLI on Zarr stores
+│   ├── ingest_plt_to_zarr.py
+│   └── wake_postprocess.py
 ├── examples/
-│   └── binary_workflow.py          # Minimal end-to-end example
-├── wake.ipynb / wake1.ipynb        # Exploratory notebooks (ASCII era)
+│   └── binary_workflow.py
+└── wake1.ipynb                     # Step-by-step post-processing (start here)
 ```
 
 ---
 
 ## Input data
 
-### Primary 3D wake field (`Result015000-avg.plt`)
+All CFD inputs live under **`inputs/flood-log-7/`** (not the project root).
 
-Example metadata for the reference case:
+### Primary 3D wake field (`Result015000-avg.plt`)
 
 | Property | Value |
 |----------|--------|
@@ -113,12 +132,17 @@ Shapes after load:
 - Node: `(1325, 73, 1325)`
 - Cell: `(1324, 72, 1324)`
 
-### Other files in `flood-log-7/`
+On an **XZ slice** at fixed J (vertical plane, Y constant):
 
-These are **not** handled by the binary ingest pipeline:
+- Node coords `X`, `Z`: `(1325, 1325)`
+- Cell field `W`: `(1324, 1324)`
 
-- **`Flow0_*.dat` / `Flow1_*.dat`** — plain numeric probe tables (no Tecplot header)
-- **`Turbine_*`** — ASCII time series (`Variables="time", "angle", ...`)
+### Other files in `inputs/flood-log-7/`
+
+Not handled by the binary ingest pipeline:
+
+- **`Flow0_*.dat` / `Flow1_*.dat`** — plain probe tables
+- **`Turbine_*`** — ASCII time series
 
 Use pandas directly for those.
 
@@ -126,248 +150,179 @@ Use pandas directly for those.
 
 ## Installation
 
-From the project root:
+From the project root, install into the **same Python** used for the notebook kernel:
 
 ```bash
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### Recommended environment
-
-- Python 3.10+
-- **NumPy &lt; 2.3** (see [Troubleshooting](#troubleshooting) if you use Anaconda pandas/pyarrow)
-
-Optional for plotting in notebooks:
+Or with Anaconda (recommended for Jupyter — kernel **`Anaconda 3.12 (cfd-wake)`**):
 
 ```bash
-pip install matplotlib seaborn
+python -m pip install -r requirements.txt
 ```
+
+If `Activate.ps1` fails (PowerShell execution policy), call `.\.venv\Scripts\python.exe` explicitly.
+
+### Requirements
+
+- Python 3.10–3.12 preferred for notebooks (3.13 needs `setuptools` for `tecio`)
+- `numpy`, `zarr`, `tecio`, `matplotlib`, `ipykernel` (see `requirements.txt`)
 
 ---
 
 ## Quick start
 
 ```bash
-# 1) Convert binary → Zarr (once per case)
-python scripts/ingest_plt_to_zarr.py flood-log-7/Result015000-avg.plt \
-  -o flood-log-7/Result015000-avg.zarr --overwrite
+# 1) Ingest (once per case)
+python scripts/ingest_plt_to_zarr.py inputs/flood-log-7/Result015000-avg.plt \
+  -o inputs/flood-log-7/Result015000-avg.zarr --overwrite
 
-# 2) Inspect the store
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr info
+# 2) Inspect
+python scripts/wake_postprocess.py inputs/flood-log-7/Result015000-avg.zarr info
 
-# 3) Extract a horizontal slice at mid-height (K index)
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr slice \
-  --plane XY --index 662 --vars X,Y,Z,U,K
-
-# 4) Line probe along streamwise direction (K) at fixed I, J
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr line \
-  --axis K --i 600 --j 36 --vars X,Z,U,K --csv outputs/line_probe.csv
+# 3) Open wake1.ipynb and run all cells (or use the API below)
 ```
+
+---
+
+## Notebook walkthrough (`wake1.ipynb`)
+
+Primary guide for interactive work. Run cells **in order** from the top.
+
+| Section | Content |
+|---------|---------|
+| Setup | Paths (`inputs/flood-log-7/`), imports, `%autoreload` |
+| 1 | `pip install -r requirements.txt` |
+| 2 | Ingest `.plt` → `.zarr` |
+| 3–4 | Inspect binary metadata and Zarr store |
+| 5 | Find **J** index for target **Y = 0.65** |
+| **6** | **Contour of W on XZ plane** (validated) |
+| 7 | XY slice + U contour (mid K) |
+| 8–10 | CLI slice / line probe + CSV export |
+| 11 | YZ slice example |
+| Reference | Plane types (XY / XZ / YZ) |
+
+**Kernel:** use **`Anaconda 3.12 (cfd-wake)`** or a working `.venv` with `ipykernel`. Restart the kernel after pulling code changes to `tools/wake_store.py`.
 
 ---
 
 ## Step 1 — Ingest binary to Zarr
 
-### Command
-
 ```bash
 python scripts/ingest_plt_to_zarr.py <path/to/file.plt> [options]
 ```
-
-### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o`, `--output` | `<stem>.zarr` | Output directory |
 | `--vars X Y Z ...` | all variables | Subset to export |
 | `--overwrite` | off | Replace existing store |
-| `--chunk-i` | `128` | Chunk size along I |
-| `--chunk-k` | `128` | Chunk size along K (J is kept full: 73) |
-| `--no-compress` | off | Skip Zstd compression (faster, larger) |
-
-### Examples
+| `--chunk-i` / `--chunk-k` | `128` | Chunk sizes |
+| `--no-compress` | off | Skip Zstd (faster ingest, larger store) |
 
 ```bash
-# Full ingest with compression (typical)
-python scripts/ingest_plt_to_zarr.py flood-log-7/Result015000-avg.plt \
-  -o flood-log-7/Result015000-avg.zarr --overwrite
-
-# Fast ingest, velocity + TKE only
-python scripts/ingest_plt_to_zarr.py flood-log-7/Result015000-avg.plt \
-  --vars U V W K --no-compress --overwrite
-
-# Custom chunking for slice-heavy K-planes
-python scripts/ingest_plt_to_zarr.py flood-log-7/Result015000-avg.plt \
-  --chunk-i 256 --chunk-k 64 --overwrite
+python scripts/ingest_plt_to_zarr.py inputs/flood-log-7/Result015000-avg.plt \
+  -o inputs/flood-log-7/Result015000-avg.zarr --overwrite
 ```
 
-### What gets written
-
-**Zarr group** (`Result015000-avg.zarr/`):
-
-- One array per variable (`X/`, `Y/`, `U/`, …)
-- Group attributes: `source_plt`, `title`, `ijk`, `variables`, `var_location`
-
-**Sidecar JSON** (`Result015000-avg.zarr.json`):
-
-- Same metadata for quick inspection outside Python
-
-Default chunk layout for 3D fields: `(128, 73, 128)` — tuned so an **XY** slice at fixed K touches a minimal set of chunks.
-
-### Ingest behavior
-
-- Reads **one variable at a time** from the `.plt` file (low peak RAM, ~500 MB per node field).
-- Expect **~12–17 s per variable** on the reference grid (~3–5 min for all 14 fields, hardware-dependent).
+- Reads **one variable at a time** (~12–17 s per variable on the reference grid).
+- Writes group attrs: `source_plt`, `title`, `ijk`, `variables`, `var_location`.
+- Sidecar: `Result015000-avg.zarr.json`.
 
 ---
 
 ## Step 2 — Inspect and extract data
 
-### CLI
-
 ```bash
-python scripts/wake_postprocess.py <zarr_path> <command> [options]
+python scripts/wake_postprocess.py inputs/flood-log-7/Result015000-avg.zarr info
+
+python scripts/wake_postprocess.py inputs/flood-log-7/Result015000-avg.zarr slice \
+  --plane XZ --index 63 --vars X,Z,U,K
+
+python scripts/wake_postprocess.py inputs/flood-log-7/Result015000-avg.zarr line \
+  --axis K --i 600 --j 63 --vars X,Z,U,W,K --csv outputs/line_probe.csv
 ```
 
-#### `info`
+See `wake_postprocess.py --help` for all options.
 
-Print store metadata, shapes, and chunk sizes.
+---
 
-```bash
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr info
+## Contour plots (cell-centered fields)
+
+Velocity and turbulence variables are **cell-centered**: on an XZ slice they have shape `(1324, 1324)` while node coordinates `X`, `Z` are `(1325, 1325)`.
+
+**Do not** average only along I or only along K — that produces mismatched shapes and `contourf` will fail.
+
+Use `node_to_cell_2d` from `wake_store` to average **both** grid directions:
+
+```python
+from wake_store import WakeStore, node_to_cell_2d
+
+store = WakeStore.open("inputs/flood-log-7/Result015000-avg.zarr")
+
+# Physical Y = 0.65 → XZ vertical plane
+Y = store.read("Y")
+y_at_j = Y.mean(axis=(0, 2))
+j_idx = int(np.argmin(np.abs(y_at_j - 0.65)))
+
+sl = store.slice_plane("XZ", j_idx, variables=["X", "Z", "W"])
+X, Z, W = sl.arrays["X"], sl.arrays["Z"], sl.arrays["W"]
+
+Xc = node_to_cell_2d(X)   # (1324, 1324)
+Zc = node_to_cell_2d(Z)   # (1324, 1324)
+assert Xc.shape == W.shape == Zc.shape
+
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(10, 4))
+cf = ax.contourf(Xc, Zc, W, levels=40, cmap="RdBu_r")
+plt.colorbar(cf, ax=ax, label="W")
+ax.set_xlabel("X")
+ax.set_ylabel("Z")
+ax.set_title(f"W at Y ≈ {y_at_j[j_idx]:.3f}")
+ax.set_aspect("equal")
+plt.show()
 ```
 
-#### `slice`
-
-Extract a 2D plane.
-
-| Flag | Description |
-|------|-------------|
-| `--plane` | `XY`, `XZ`, or `YZ` |
-| `--index` | Index along the normal direction (see [Grid conventions](#grid-and-indexing-conventions)) |
-| `--vars` | Comma-separated variable names |
-| `--csv` | Optional output CSV path |
-
-```bash
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr slice \
-  --plane XZ --index 36 --vars X,Z,U,K --csv slice_xz.csv
-```
-
-#### `line`
-
-Extract a 1D line along `I`, `J`, or `K` with other indices fixed.
-
-| Flag | Description |
-|------|-------------|
-| `--axis` | `I`, `J`, or `K` |
-| `--i`, `--j`, `--k` | Fixed node indices (omit the axis you are sweeping along) |
-| `--vars` | Comma-separated names |
-| `--csv` | Optional output CSV |
-
-```bash
-python scripts/wake_postprocess.py flood-log-7/Result015000-avg.zarr line \
-  --axis I --j 36 --k 600 --vars X,Y,U
-```
+| Plane | Fixed | Axes in plane | Example use |
+|-------|--------|---------------|-------------|
+| `XZ` | **J** (Y) | X, Z | **Vertical** slice at spanwise Y |
+| `XY` | K (height) | X, Y | Horizontal slice |
+| `YZ` | I (streamwise) | Y, Z | Cross-stream slice |
 
 ---
 
 ## Python API
-
-Add `tools/` to the path (or run from `examples/`):
 
 ```python
 import sys
 sys.path.insert(0, "./tools")
 
 from tecplot_binary import TecplotBinaryDataset
-from wake_store import WakeStore
+from wake_store import WakeStore, node_to_cell_2d
 ```
 
-### Inspect binary without loading the full volume
-
-```python
-ds = TecplotBinaryDataset("flood-log-7/Result015000-avg.plt", read_data=False)
-print(ds.summary())
-
-# Load a single variable (~seconds)
-u = ds.read_variable("U")
-print(u.shape, u.min(), u.max())
-```
-
-### Open Zarr store
-
-```python
-store = WakeStore.open("flood-log-7/Result015000-avg.zarr")
-print(store.summary())
-
-# Full variable (loads entire array into memory)
-k_field = store.read("K")
-```
-
-### 2D slice — `slice_plane`
-
-```python
-k_mid = store.ijk[2] // 2  # K dimension index
-
-result = store.slice_plane(
-    "XY",
-    k_mid,
-    variables=["X", "Y", "Z", "U", "K"],
-)
-
-print(result.grid_shape)      # (1325, 73) for XY
-print(result.node_index)      # K index used for node vars
-print(result.cell_index)      # K index used for cell vars
-print(result.arrays["U"].shape)  # (1324, 72) — cell-centered
-```
-
-Export to CSV (node and cell variables must share the same flattened length):
-
-```python
-# Safe: coordinates only (all node-based, same shape)
-coords = store.slice_plane("XY", k_mid, variables=["X", "Y", "Z"])
-df = coords.to_dataframe()
-
-# Or export cell fields separately
-cells = store.slice_plane("XY", k_mid, variables=["U", "V", "W", "K"])
-```
-
-### 1D line probe — `line_probe`
-
-```python
-line = store.line_probe(
-    axis="K",
-    fixed={"I": 600, "J": 36},
-    variables=["X", "Z", "U", "K"],
-)
-
-# Includes an 'index' array (0 .. N-1 along the sweep axis)
-import matplotlib.pyplot as plt
-plt.plot(line["Z"], line["U"])
-```
-
-### `WakeStore` reference
+### `WakeStore`
 
 | Method | Description |
 |--------|-------------|
-| `WakeStore.open(path)` | Construct store from Zarr directory |
-| `store.summary()` | Human-readable metadata string |
-| `store.get(name)` | Zarr array handle (lazy) |
-| `store.read(name)` | NumPy array (full load) |
-| `store.slice_plane(plane, index, variables=...)` | → `SliceResult` |
-| `store.line_probe(axis, fixed, variables=...)` | → `dict[str, ndarray]` |
+| `WakeStore.open(path)` | Open Zarr store |
+| `store.read(name)` | Load full variable as NumPy array |
+| `store.slice_plane(plane, index, variables=...)` | 2D slice → `SliceResult` |
+| `store.line_probe(axis, fixed, variables=...)` | 1D line → `dict` |
 
-### `SliceResult` fields
+### `node_to_cell_2d(node_2d)`
 
-| Field | Meaning |
-|-------|---------|
-| `plane` | `XY`, `XZ`, or `YZ` |
-| `index` | User-supplied index (node space for the normal direction) |
-| `node_index` | Index used for node variables |
-| `cell_index` | Index used for cell-centered variables |
-| `grid_shape` | 2D shape of the slice in logical I/J/K layout |
-| `arrays` | `{variable_name: ndarray}` |
-| `to_dataframe()` | Pandas DataFrame (requires equal-length arrays) |
+Converts a 2D **node** grid `(I, K)` to **cell centers** `(I-1, K-1)` for `matplotlib.contourf` with cell-centered fields.
+
+### `TecplotBinaryDataset`
+
+Inspect or read `.plt` directly (slower for repeated access than Zarr):
+
+```python
+ds = TecplotBinaryDataset("inputs/flood-log-7/Result015000-avg.plt", read_data=False)
+print(ds.summary())
+```
 
 ---
 
@@ -375,151 +330,112 @@ plt.plot(line["Z"], line["U"])
 
 ### Tecplot ORDERED layout
 
-Arrays are shaped `(I, J, K)` with **I varying fastest**, then J, then K — consistent with Tecplot `ORDERED` zones and `tecio` output.
-
-Index `i` along I, `j` along J, `k` along K:
-
-```text
-linear_index = i + j * I + k * I * J
-```
+Arrays are `(I, J, K)` with **I fastest**, then J, then K.
 
 ### Node vs cell-centered
 
-| Location | Variables (typical) | Shape |
-|----------|---------------------|--------|
+| Location | Variables | 3D shape |
+|----------|-----------|----------|
 | Node | `X`, `Y`, `Z` | `(I, J, K)` |
-| Cell | `U`, `V`, `W`, Reynolds stresses, `K`, `Nv` | `(I-1, J-1, K-1)` |
+| Cell | `U`, `V`, `W`, stresses, `K`, `Nv` | `(I-1, J-1, K-1)` |
 
-When you call `slice_plane` with index `k`:
-
-- Node fields use `[:, :, k]`
-- Cell fields use `[:, :, k_cell]` with `k_cell = min(k, K-2)`
-
-So **velocity on an XY slice is one cell shorter** in I and J than coordinates — this is expected, not a bug.
-
-### Plane definitions
-
-| Plane | Fixed dimension | `index` range | 2D shape |
-|-------|-----------------|---------------|----------|
-| `XY` | K | `0 … K-1` | `(I, J)` |
-| `XZ` | J | `0 … J-1` | `(I, K)` |
-| `YZ` | I | `0 … I-1` | `(J, K)` |
-
-### Mapping index to physical position
-
-Use node coordinates from the same slice:
-
-```python
-sl = store.slice_plane("XY", k_index, variables=["X", "Y", "Z"])
-x2d = sl.arrays["X"]  # shape (I, J)
-y2d = sl.arrays["Y"]
-```
-
-For cell-centered `U`, either plot on the cell subgrid or interpolate to nodes in a notebook.
+`slice_plane` uses a **node index** along the fixed direction; cell fields use the nearest valid cell index (`cell_index` on `SliceResult`).
 
 ---
 
 ## Performance and disk usage
 
-| Stage | Reference case | Notes |
-|-------|----------------|-------|
-| `.plt` on disk | ~6.7 GB | float32 BLOCK data |
-| Ingest time | ~3–5 min | 14 variables, compressed |
-| `.zarr` on disk | ~5–8 GB | Depends on `--no-compress` |
-| XY slice read | Sub-second | After ingest; chunked I–K |
+| Stage | Reference case |
+|-------|----------------|
+| `.plt` | ~6.7 GB |
+| Ingest | ~3–5 min (14 variables) |
+| `.zarr` | ~5–8 GB compressed |
+| XZ slice + contour | Seconds after ingest |
 
-**Tips:**
-
-- Run ingest on a **local or fully synced** copy of `flood-log-7` (Box/OneDrive can stall on multi-GB files).
-- Use `--vars` during development to ingest only `X Y Z U K`.
-- Prefer Zarr for repeated notebook work; hit `.plt` directly only for one-off full-volume loads.
+Run ingest on a **local or offline-synced** copy of `inputs/flood-log-7` (Box can slow multi-GB I/O).
 
 ---
 
 ## Legacy ASCII support
 
-`tools/tecplot_lazy_reader.py` streams Tecplot **ASCII** `.dat` files without loading the full ~27 GB volume. The notebooks `wake.ipynb` and `wake1.ipynb` were built around this path.
-
-For new work, use the **binary → Zarr** pipeline instead. ASCII remains available for comparison or if only `.dat` exists.
-
-```python
-from tecplot_lazy_reader import TecplotLazyReader
-
-reader = TecplotLazyReader("flood-log-7/tecplot-output.dat")
-reader.parse_header()
-sample = reader.sample_variable(var_index=4, count=100)  # 1-based index
-```
+`tools/tecplot_lazy_reader.py` and `wake.ipynb` target the old ~27 GB ASCII `tecplot-output.dat`. **New work:** binary → Zarr via `wake1.ipynb`.
 
 ---
 
 ## Troubleshooting
 
-### `FileNotFoundError` for `.plt` or `flood-log-7`
+### Data path: `inputs/flood-log-7/`
 
-Cloud-synced folders (Box) may show paths in the IDE before files are available locally. Ensure the file is **available offline** or copied locally before ingest.
-
-### NumPy 2.x warnings with pandas / pyarrow
-
-If you see errors about *“compiled using NumPy 1.x”*, use a compatible stack:
-
-```bash
-pip install "numpy>=1.22,<2.3"
+```powershell
+python scripts/ingest_plt_to_zarr.py inputs/flood-log-7/Result015000-avg.plt -o inputs/flood-log-7/Result015000-avg.zarr --overwrite
 ```
 
-Or use your Anaconda base env where NumPy 1.26 is already installed.
+Ensure Box files are **available offline** before ingest.
+
+### `TypeError: Shapes of x ... and z ... do not match` in `contourf`
+
+Use `node_to_cell_2d` on **both** coordinate arrays (see [Contour plots](#contour-plots-cell-centered-fields)). Restart kernel and re-import if you added it recently:
+
+```python
+from wake_store import node_to_cell_2d
+```
+
+### `ImportError: cannot import name 'node_to_cell_2d'`
+
+The function is in `tools/wake_store.py`. **Restart the Jupyter kernel** and re-run Setup (or use `%autoreload 2` in the notebook).
+
+### Jupyter kernel timeout (`.venv 3.13`)
+
+Switch to **`Anaconda 3.12 (cfd-wake)`** or recreate `.venv` with Python 3.12 (see earlier README notes / `.vscode/settings.json`).
+
+### `ModuleNotFoundError: No module named 'zarr'`
+
+Install into the interpreter that runs the notebook:
+
+```powershell
+python -c "import sys; print(sys.executable)"
+python -m pip install -r requirements.txt
+```
 
 ### `Cannot build DataFrame` on slice export
 
-Node vars `(1325, 73)` and cell vars `(1324, 72)` have different sizes on the same plane. Export them in separate CSV files or use only variables of the same `var_location`.
+Node and cell variables have different lengths on the same plane — export coords and fields separately, or use matching `var_location` only.
 
-### Ingest fails with `Multi-zone files are not supported`
-
-The tools currently assume **exactly one zone** per `.plt`. Split or export a single zone from Tecplot if needed.
-
-### Zarr `manifest.json` warning
-
-Older test stores may contain a `manifest.json` inside the Zarr directory. Delete it; metadata lives in `.zattrs` and the `.zarr.json` sidecar.
-
-### `tecio` import error
+### `tecio` on Python 3.13
 
 ```bash
-pip install tecio>=2.0.6
+pip install tecio setuptools
 ```
-
-No Tecplot license is required.
 
 ---
 
 ## Limitations and roadmap
 
-**Current limitations:**
+**Current scope:**
 
-- Single-zone `.plt` files only
-- No built-in interpolation of cell-centered data onto nodes
-- No batch ingest across many `.plt` files (run the script per file)
-- Probe/turbine ASCII formats are out of scope
+- Single-zone `.plt` files
+- Structured ORDERED grids only
+- Contours via `node_to_cell_2d` (no interpolation to nodes yet)
 
 **Possible extensions:**
 
-- Batch ingest driver for all cases in `flood-log-7`
-- Notebook templates (contour, quiver, wake deficit vs `Uref`)
-- Optional xarray/Dask layer on top of Zarr
+- Batch ingest for all cases in `inputs/flood-log-7`
+- Quiver / wake-deficit plots
+- xarray/Dask layer on Zarr
 - VTK export for ParaView
 
 ---
 
 ## Example script
 
-See `examples/binary_workflow.py`:
-
 ```bash
 python examples/binary_workflow.py
 ```
 
-Requires an existing Zarr store (run ingest first).
+Requires an existing Zarr store.
 
 ---
 
 ## License note
 
-**tecio** is GPL-3.0. If you distribute tooling that links or bundles it, review license obligations. Internal analysis use within Verdant is typically fine; confirm with your compliance process for external releases.
+**tecio** is GPL-3.0. Review license obligations if you distribute tooling that bundles it.

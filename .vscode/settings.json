@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "C:\\ProgramData\\anaconda3\\python.exe",
+  "python.terminal.activateEnvironment": false,
+  "notebook.kernelProviderAssociations": [
+    {
+      "viewType": "jupyter-notebook",
+      "kernelProvider": "ms-toolsai.jupyter"
+    }
+  ],
+  "jupyter.kernels.excludePythonEnvironments": []
+}

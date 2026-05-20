@@ -10,8 +10,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from tecplot_binary import TecplotBinaryDataset  # noqa: E402
 from wake_store import WakeStore  # noqa: E402
 
-PLT = ROOT / "flood-log-7" / "Result015000-avg.plt"
-ZARR = ROOT / "flood-log-7" / "Result015000-avg.zarr"
+PLT = ROOT / "inputs" / "flood-log-7" / "Result015000-avg.plt"
+ZARR = ROOT / "inputs" / "flood-log-7" / "Result015000-avg.zarr"
 
 
 def main() -> None:
