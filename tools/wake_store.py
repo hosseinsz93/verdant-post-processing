@@ -27,6 +27,26 @@ def node_to_cell_2d(node: np.ndarray) -> np.ndarray:
     )
 
 
+def node_line_to_cell_1d(node: np.ndarray) -> np.ndarray:
+    """Average adjacent nodes on a 1D line to cell centers (length N-1)."""
+    if node.ndim != 1 or node.size < 2:
+        raise ValueError(f"expected 1D array with size >= 2, got shape {node.shape}")
+    return 0.5 * (node[:-1] + node[1:])
+
+
+def cell_line_to_node_1d(cell: np.ndarray) -> np.ndarray:
+    """Expand a 1D cell-centered line to nodes (length N+1) for mixed probes."""
+    if cell.ndim != 1 or cell.size < 1:
+        raise ValueError(f"expected 1D cell array, got shape {cell.shape}")
+    if cell.size == 1:
+        return np.array([cell[0], cell[0]])
+    out = np.empty(cell.size + 1, dtype=cell.dtype)
+    out[0] = cell[0]
+    out[-1] = cell[-1]
+    out[1:-1] = 0.5 * (cell[:-1] + cell[1:])
+    return out
+
+
 @dataclass
 class SliceResult:
     plane: Plane
@@ -144,11 +164,17 @@ class WakeStore:
         axis: Literal["I", "J", "K"],
         fixed: Dict[str, int],
         variables: Optional[Sequence[str]] = None,
+        *,
+        align_to: Optional[Literal["node", "cell"]] = None,
     ) -> Dict[str, np.ndarray]:
         """Extract a 1D line along ``axis`` with other indices held fixed.
 
         ``fixed`` uses keys I/J/K with *node* indices for positioning. Cell-centered
         fields use the nearest valid cell index (clamped).
+
+        With ``align_to``, node and cell variables are resampled to the same length
+        along ``axis`` (node length N, cell length N-1). Use ``align_to='cell'`` when
+        plotting cell-centered fields (e.g. W) against streamwise coordinate Z.
         """
         I, J, K = self.ijk
         axis = axis.upper()
@@ -165,9 +191,34 @@ class WakeStore:
             loc = self.var_location.get(name, "node")
             sl, length_axis = self._line_slice(axis, fixed, cell_centered=(loc == "cell"))
             out[name] = np.asarray(z[sl])
+        if align_to is not None:
+            out = self._align_line_probe(axis, out, align_to)
+            length_axis = len(next(iter(v for k, v in out.items() if k != "index")))
         if length_axis is not None:
             out["index"] = np.arange(length_axis)
         return out
+
+    def _align_line_probe(
+        self,
+        axis: str,
+        out: Dict[str, np.ndarray],
+        align_to: Literal["node", "cell"],
+    ) -> Dict[str, np.ndarray]:
+        axis_len_node = {"I": self.ijk[0], "J": self.ijk[1], "K": self.ijk[2]}[axis]
+        aligned: Dict[str, np.ndarray] = {}
+        for name, arr in out.items():
+            if name == "index":
+                continue
+            loc = self.var_location.get(name, "node")
+            if align_to == "cell":
+                aligned[name] = (
+                    arr if loc == "cell" and len(arr) == axis_len_node - 1 else node_line_to_cell_1d(arr)
+                )
+            else:
+                aligned[name] = (
+                    arr if loc == "node" and len(arr) == axis_len_node else cell_line_to_node_1d(arr)
+                )
+        return aligned
 
     @staticmethod
     def _node_slice(plane: str, index: int) -> Tuple:
